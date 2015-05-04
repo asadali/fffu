@@ -43,8 +43,17 @@ def initLogging():
 
 class FFFU(Operations):
 	""" FFFU system object """
-	def __init__(self, root):
+	def __init__(self, root, fs_id=None):
 		super(FFFU, self).__init__()
+		self.logger  = logging.getLogger('FF4F')
+		self.logger.debug('init')
+
+		self.offline = False
+
+		api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
+		api_secret   = '768e8faf9d827aad'
+		api_token    = '72157652063976241-07f9b09c99760c7e'
+
 		self._cache  = {}
 		self.root    = root
 
@@ -53,16 +62,18 @@ class FFFU(Operations):
 			                        )
 		#TODO search for fs.xml.png 
 		# https://www.flickr.com/services/api/flickr.photos.search.html
-		fsfile = open('fs.xml', 'r')
+		self.fspath     = self._full_path('fs.xml')
+		self.ref_file   = 'fffu.png'
+		self.png_offset = 3975
+		# # to download file from flickr on start
+		# if (not os.path.exists(fspath)):
+		# 	if (fs_id == None):
+		# 		self.logger.info('need root file id to start')
+		# 		raise FuseOSError(errno.EIO)
+		# 	self._get_file(self._get_url_by_id(fs_id))
+		fsfile = open(self.fspath, 'r')
 		self.rootree = etree.parse(fsfile)
 		fsfile.close()
-
-		self.logger  = logging.getLogger('FF4F')
-		self.logger.debug('init')
-
-		api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
-		api_secret   = '768e8faf9d827aad'
-		api_token    = '72157652063976241-07f9b09c99760c7e'
 
 		self.flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
 		if not self._test_echo():
@@ -150,7 +161,11 @@ class FFFU(Operations):
 		# FFFU
 		# first-pass just remove
 		cur_file = self._get_dir(path)
-		os.remove(self._full_path(cur_file.attrib['st_inode']))
+		# delete copy on flickr
+		if not self.offline:
+			self.flickr.photos_delete(photo_id=cur_file.attrib['photo_id'])
+		# delete local copy
+		os.remove(self._full_path(cur_file.attrib['st_inode'] + '.png'))
 		self._del_node(path)
 		# return os.unlink(self._full_path(path))
 
@@ -245,8 +260,8 @@ class FFFU(Operations):
 		# no need to store it in a directory etc.
 
 		cur_file = self._get_dir(path)
-		full_path = self._full_path(cur_file.attrib['st_inode'])
-		self.logger.debug('open - %s' % (path))
+		full_path = self._full_path(cur_file.attrib['st_inode'] + '.png')
+		self.logger.info('open - %s' % (path))
 		return os.open(full_path, flags)
 
 	def create(self, path, mode, fi=None):
@@ -256,37 +271,40 @@ class FFFU(Operations):
 		new_node  = self._add_node(path, mode, st_type='f')
 
 		full_path = self._full_path(new_node.attrib['st_inode'])
-		self.logger.info('create - path %s mode %s full_path %s' % (path, mode, full_path))
 		tmpfile = full_path + '.png'
 		with open('fffu.png', 'rb') as src, open(tmpfile, 'wb') as dest:
 			dest.write(src.read())
 
-		ret = self.flickr.upload(filename=tmpfile, is_public=0)
-		new_node.attrib['photo_id'] = ret.find('photoid').text
+		if not self.offline:
+			ret = self.flickr.upload(filename=tmpfile, is_public=0)
+			new_node.attrib['photo_id'] = ret.find('photoid').text
+			new_node.attrib['url']      = self._get_url_by_id(new_node.attrib['photo_id'])
+			self.logger.info('create - path %s mode %s full_path %s url %s' % (path, mode, full_path, new_node.attrib['url']))
 
-		os.remove(tmpfile)
+		# os.remove(tmpfile)
 		self._save_fs()
-		return os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
+
+		return os.open(full_path + '.png', os.O_WRONLY | os.O_CREAT, mode)
 
 	def read(self, path, length, offset, fh):
-		self.logger.debug('read - %s' % path)
-		os.lseek(fh, offset, os.SEEK_SET)
+		self.logger.info('read - path: %s length: %s offset: %s' % (path, length, offset))
+		os.lseek(fh, offset + self.png_offset, os.SEEK_SET)
 		return os.read(fh, length)
 
 	def write(self, path, buf, offset, fh):
-		self.logger.debug('write - %s buf: %s' % (path, buf))
-		os.lseek(fh, offset, os.SEEK_SET)
+		self.logger.info('write - %s buf: %s' % (path, buf))
+		os.lseek(fh, offset + self.png_offset, os.SEEK_SET)
 		return os.write(fh, buf)
 
 	def truncate(self, path, length, fh=None):
-		self.logger.debug('truncate')
+		self.logger.info('truncate - path: %s length: %s' % (path, length))
 		cur_file = self._get_dir(path)
-		full_path = self._full_path(cur_file.attrib['st_inode'])
+		full_path = self._full_path(cur_file.attrib['st_inode'] + '.png')
 		with open(full_path, 'r+') as f:
-			f.truncate(length)
+			f.truncate(length + self.png_offset)
 
 	def flush(self, path, fh):
-		self.logger.debug('flush')
+		self.logger.info('flush')
 		return os.fsync(fh)
 
 	def release(self, path, fh):
@@ -297,7 +315,16 @@ class FFFU(Operations):
 		return os.close(fh)
 
 	def fsync(self, path, fdatasync, fh):
-		self.logger.debug('fsync')
+		cur_file  = self._get_dir(path)
+		file_name = cur_file.attrib['st_inode'] + '.png'
+		if not self.offline:
+			photo_id  = cur_file.attrib['photo_id']
+			ret = self.flickr.replace(filename=self._full_path(file_name), photo_id = photo_id)
+			cur_file.attrib['url']   = self._get_url_by_id(photo_id)
+			self.logger.info('fsync - path: %s url: %s' % (path, cur_file.attrib['url']))
+
+		self._save_fs()
+
 		return self.flush(path, fh)
 
 	# Helpers
@@ -332,8 +359,21 @@ class FFFU(Operations):
 			return True
 		return False
 
+	def _get_url_by_id(self, id):
+		ret = self.flickr.photos_getInfo(photo_id=id)
+		photo = ret.find('photo')
+		# sample original url format
+		# https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
+		farm_id   = photo.attrib['farm']
+		server_id = photo.attrib['server']
+		photo_id  = photo.attrib['id']
+		o_secret  = photo.attrib['originalsecret']
+		url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
+		return url
+
+
 	def _save_fs(self):
-		fsfile = open('fs.xml', 'w')
+		fsfile = open(self.fspath, 'w')
 		self.rootree.write(fsfile)
 		fsfile.close()
 

@@ -71,18 +71,47 @@ def callback(progress, done):
     print done
     print 10*'*'
 
+api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
+api_secret   = '768e8faf9d827aad'
+api_token    = '72157652063976241-07f9b09c99760c7e'
+flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
+
+def delPhotoByID(ids):
+    for id in ids:
+        ret = flickr.photos_delete(photo_id=id)
+        print ET.tostring(ret, encoding = 'utf8')
+
+def getInfoByID(id):
+    ret = flickr.photos_getInfo(photo_id='17105709380')
+    # print ET.tostring(ret, encoding = 'utf8')
+    photo = ret.find('photo')
+    # https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
+    farm_id   = photo.attrib['farm']
+    server_id = photo.attrib['server']
+    photo_id  = photo.attrib['id']
+    o_secret  = photo.attrib['originalsecret']
+    url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
+    print url
+
+# <rsp stat="ok">
+# <photoid>17183990388</photoid>
+# </rsp>
+
+# <rsp stat="ok">
+# <photoid originalsecret="e8649e3cb3" secret="3dfc14e4a4">17183990388</photoid>
+# </rsp>
+def replacePhoto():
+    ret = flickr.replace(filename='fffu.png', photo_id='17183990388')
+    print ET.tostring(ret, encoding='utf8')
+
 def validUpload():
-    api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
-    api_secret   = '768e8faf9d827aad'
-    api_token    = '72157652063976241-07f9b09c99760c7e'
-    fname        = '235235'
+    fname        = 'vsfs.py.png'
     # d2p(fname)    
-    flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
     # ret = flickr.upload(filename=fname + '.png', is_public=0, callback=callback)
-    # ret = flickr.upload(filename=fname, is_public=0)
+    ret = flickr.upload(filename=fname, is_public=0)
     # ret = flickr.replace(filename=fname + '.png', photo_id='17104952349')
-    ret = flickr.photos_delete(photo_id='17104731428')
-    ret = flickr.photos_delete(photo_id='17104810970')
+    # ret = flickr.photos_delete(photo_id='17104731428')
+    # ret = flickr.photos_delete(photo_id='17104810970')
     # print ret
     # print ret.attrib
     # secret   = ret.find('photoid').attrib['secret']
@@ -199,7 +228,10 @@ def dummyFS():
         print child.tag
 
 if __name__ == '__main__':
-    validUpload()
+    replacePhoto()
+    # delPhotoByID(ids)
+    # getInfoByID(3)
+    # validUpload()
     # lxmlSandbox()
     # dummyFS()
     # d2p('vsfs.py')
