@@ -75,14 +75,22 @@ def validUpload():
     api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
     api_secret   = '768e8faf9d827aad'
     api_token    = '72157652063976241-07f9b09c99760c7e'
-    fname        = 'vsfs.py'
-    d2p(fname)    
+    fname        = '235235'
+    # d2p(fname)    
     flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
-    # ret          = flickr.test_echo()
-    ret = flickr.upload(filename=fname + '.png', is_public=0, callback=callback)
-    print ret
-    print ret.attrib
-    photoid = ret.find('photoid').text
+    # ret = flickr.upload(filename=fname + '.png', is_public=0, callback=callback)
+    # ret = flickr.upload(filename=fname, is_public=0)
+    # ret = flickr.replace(filename=fname + '.png', photo_id='17104952349')
+    ret = flickr.photos_delete(photo_id='17104731428')
+    ret = flickr.photos_delete(photo_id='17104810970')
+    # print ret
+    # print ret.attrib
+    # secret   = ret.find('photoid').attrib['secret']
+    # o_secret = ret.find('photoid').attrib['originalsecret']
+
+    # print secret, o_secret
+
+    # info = flickr.photos_getInfo(photo_id='17104952349')
     
     # d = ElementTree.tostring(ret, encoding='utf8', method='xml')
     d = ET.tostring(ret, encoding='utf8')
@@ -90,6 +98,33 @@ def validUpload():
     # print ret.attrib['stat']
     # photo = flickr.photos_getRecent(per_page='1')
     # print photo
+
+# https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
+# e42c0477bd 0707050a6c
+# https://farm8.staticflickr.com/7719/17104952349_0707050a6c_o.png
+# https://farm8.staticflickr.com/7719/17104952349_9eeec42c1c_o.png
+
+# <?xml version='1.0' encoding='utf8'?>
+# <rsp stat="ok">
+# <photo dateuploaded="1430153569" farm="8" id="17104952349" isfavorite="0" license="0" media="photo" originalformat="png" originalsecret="9eeec42c1c" rotation="0" safety_level="0" secret="b700db1c74" server="7719" views="0">
+#     <owner iconfarm="9" iconserver="8702" location="" nsid="68767188@N06" path_alias="" realname="" username="thundrdog" />
+#     <title>vsfs.py</title>
+#     <description />
+#     <visibility isfamily="0" isfriend="0" ispublic="0" />
+#     <dates lastupdate="1430153571" posted="1430153569" taken="2015-04-27 09:52:49" takengranularity="0" takenunknown="1" />
+#     <permissions permaddmeta="2" permcomment="3" />
+#     <editability canaddmeta="1" cancomment="1" />
+#     <publiceditability canaddmeta="0" cancomment="1" />
+#     <usage canblog="1" candownload="1" canprint="1" canshare="1" />
+#     <comments>0</comments>
+#     <notes />
+#     <people haspeople="0" />
+#     <tags />
+#     <urls>
+#         <url type="photopage">https://www.flickr.com/photos/68767188@N06/17104952349/</url>
+#     </urls>
+# </photo>
+# </rsp>
 
 def prettify(elem):
     """Return a pretty-printed XML string for the Element.

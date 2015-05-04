@@ -51,6 +51,8 @@ class FFFU(Operations):
 		self.rootxml = etree.Element( 'root'
 			                        , st_type  ='d'
 			                        )
+		#TODO search for fs.xml.png 
+		# https://www.flickr.com/services/api/flickr.photos.search.html
 		fsfile = open('fs.xml', 'r')
 		self.rootree = etree.parse(fsfile)
 		fsfile.close()
@@ -254,7 +256,16 @@ class FFFU(Operations):
 		new_node  = self._add_node(path, mode, st_type='f')
 
 		full_path = self._full_path(new_node.attrib['st_inode'])
-		self.logger.debug('create - path %s mode %s full_path %s' % (path, mode, full_path))
+		self.logger.info('create - path %s mode %s full_path %s' % (path, mode, full_path))
+		tmpfile = full_path + '.png'
+		with open('fffu.png', 'rb') as src, open(tmpfile, 'wb') as dest:
+			dest.write(src.read())
+
+		ret = self.flickr.upload(filename=tmpfile, is_public=0)
+		new_node.attrib['photo_id'] = ret.find('photoid').text
+
+		os.remove(tmpfile)
+		self._save_fs()
 		return os.open(full_path, os.O_WRONLY | os.O_CREAT, mode)
 
 	def read(self, path, length, offset, fh):
@@ -279,7 +290,7 @@ class FFFU(Operations):
 		return os.fsync(fh)
 
 	def release(self, path, fh):
-		self.logger.debug('release - path %s' % path)
+		self.logger.info('release - path %s' % path)
 		self._get_dir(path).attrib['st_size'] = str(os.fstat(fh).st_size)
 		self._save_fs()
 
@@ -343,7 +354,7 @@ class FFFU(Operations):
 		return cur_inode
 
 	def _add_node(self, path, mode, st_type=None, st_inode=None):
-		self.logger.debug('_add_node path: %s mode: %s st_type: %s flickr: %s'%(path, str(mode), st_type, st_inode))
+		self.logger.info('_add_node path: %s mode: %s st_type: %s flickr: %s'%(path, str(mode), st_type, st_inode))
 		parentDir  = self._get_parent(path)
 
 		# convert all attributes to string
@@ -389,7 +400,7 @@ class FFFU(Operations):
 if __name__ == '__main__':
 	lw = 40
 	print '*' * lw
-	print 'FF4F (FUSE Filesystem for Flickr)'.center(lw)
+	print 'FFFU (FUSE Flickr Filesystem for U)'.center(lw)
 	print '*' * lw
 
 	initLogging()
