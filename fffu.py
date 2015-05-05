@@ -309,7 +309,7 @@ class FFFU(Operations):
 
 	def release(self, path, fh):
 		self.logger.info('release - path %s' % path)
-		self._get_dir(path).attrib['st_size'] = str(os.fstat(fh).st_size)
+		self._get_dir(path).attrib['st_size'] = str(max(0, os.fstat(fh).st_size - self.png_offset))
 		self._save_fs()
 
 		return os.close(fh)
@@ -399,7 +399,10 @@ class FFFU(Operations):
 
 		# convert all attributes to string
 		ctx = fuse.fuse_get_context()
-		st_size  = str(0)
+		if st_type == 'd':
+			st_size  = str(64) # standard size of directory entry
+		if st_type == 'f':
+			st_size = '0'
 		st_mode  = str(mode)
 		st_uid   = str(ctx[0])
 		st_gid   = str(ctx[1])
