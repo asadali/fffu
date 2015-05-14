@@ -1,7 +1,7 @@
 """
 fffu.py
-Flickr FUSE Filesystem for U
-Copyright 2015 Sayed Asad Ali <sayedasad@ucsd.edu>
+Flickr FUSE Filesystem for User
+Copyright 2015 Sayed Asad Ali <sayedasad@eng.ucsd.edu>
 
 THIS SOFTWARE IS SUPPLIED WITHOUT WARRANTY OF ANY KIND, AND MAY BE
 COPIED, MODIFIED OR DISTRIBUTED IN ANY WAY, AS LONG AS THIS NOTICE
@@ -20,8 +20,18 @@ import fs.base
 import fuse
 import stat
 import time
+import argparse
+import traceback
+import urllib
 from fuse import FUSE, FuseOSError, Operations
 from lxml import etree
+try:
+	from config import api_key, api_secret, api_token
+except ImportError:
+	# TODO make this more presentable
+	print '[ERROR] create config.py file with api_key, api_secret, api_token and retry'	
+	sys.exit(-1)
+
 # temporary import
 import xml.etree.cElementTree as ET
 
@@ -41,21 +51,17 @@ def initLogging():
 
 class FFFU(Operations):
 	""" FFFU system object """
-	def __init__(self, root, fs_id=None):
+	def __init__(self, rootpath, fs_id=None):
 		super(FFFU, self).__init__()
-		self.logger  = logging.getLogger('FF4F')
+		self.logger  = logging.getLogger('FFFU')
 		self.logger.debug('init')
 
 		self.online = True
 
-		api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
-		api_secret   = '768e8faf9d827aad'
-		api_token    = '72157652063976241-07f9b09c99760c7e'
+		self._cache   = {}
+		self.rootpath = rootpath
 
-		self._cache  = {}
-		self.root    = root
-
-		self.rootxml = etree.Element( 'root'
+		self.rootxml = etree.Element( 'rootpath'
 			                        , st_type  ='d'
 			                        )
 		#TODO search for fs.xml.png 
@@ -66,7 +72,7 @@ class FFFU(Operations):
 		# # to download file from flickr on start
 		# if (not os.path.exists(fspath)):
 		# 	if (fs_id == None):
-		# 		self.logger.info('need root file id to start')
+		# 		self.logger.info('need rootpath file id to start')
 		# 		raise FuseOSError(errno.EIO)
 		# 	self._get_file(self._get_url_by_id(fs_id))
 		fsfile = open(self.fspath, 'r')
@@ -122,7 +128,7 @@ class FFFU(Operations):
 		# pathname = os.readlink(self._full_path(path))
 		# if pathname.startswith("/"):
 		# 	# Path name is absolute, sanitize it.
-		# 	return os.path.relpath(pathname, self.root)
+		# 	return os.path.relpath(pathname, self.rootpath)
 		# else:
 		# 	return pathname
 		raise FuseOSError(errno.ENOSYS)
@@ -139,7 +145,7 @@ class FFFU(Operations):
 				dirs.append(child.tag)
 
 		# this is an optimization
-		dirs.sort()
+		# dirs.sort()
 		self.logger.debug('readdir - path: %s dirs: %s' % (path, str(dirs)))
 		for r in dirs:
 			yield r
@@ -235,7 +241,7 @@ class FFFU(Operations):
 		# fffu implementation
 		# ideally this should let user know
 		# about the space left on the flickr account
-		self.logger.debug('statfs - %s root: %s' % (path, self.root))
+		self.logger.debug('statfs - %s rootpath: %s' % (path, self.rootpath))
 
 		# not implementing now as it is a very frequent function call
 		# ret = self.flickr.test_echo()		
@@ -267,7 +273,9 @@ class FFFU(Operations):
 
 		cur_file = self._get_dir(path)
 		full_path = self._full_path(cur_file.attrib['st_inode'] + '.png')
-		self.logger.info('open - %s' % (path))
+		self.logger.info('open - %s %s %d' % (path, full_path, flags))
+		# if not os.path.isfile(full_path):
+		# 	raise FuseOSError(errno.ENOENT)
 		return os.open(full_path, flags)
 
 	def create(self, path, mode, fi=None):
@@ -280,7 +288,7 @@ class FFFU(Operations):
 		tmpfile = full_path + '.png'
 
 		# binary merge of two files
-		with open('fffu.png', 'rb') as src, open(tmpfile, 'wb') as dest:
+		with open(self.ref_file, 'rb') as src, open(tmpfile, 'wb') as dest:
 			dest.write(src.read())
 
 		if self.online:
@@ -322,20 +330,24 @@ class FFFU(Operations):
 
 	def release(self, path, fh):
 		self.logger.info('release - path %s' % path)
-		self._get_dir(path).attrib['st_size'] = str(max(0, os.fstat(fh).st_size - self.png_offset))
+
+		cur_file  = self._get_dir(path)
+		cur_file.attrib['st_size'] = str(max(0, os.fstat(fh).st_size - self.png_offset))
 		self._save_fs()
 
 		return os.close(fh)
 
 	def fsync(self, path, fdatasync, fh):
+		self.logger.info('fsync - path %s' % (path))
+		os.fsync(fh)
+
 		cur_file  = self._get_dir(path)
 		file_name = cur_file.attrib['st_inode'] + '.png'
 		if self.online:
 			photo_id  = cur_file.attrib['photo_id']
 			ret = self.flickr.replace(filename=self._full_path(file_name), photo_id = photo_id)
 			cur_file.attrib['url']   = self._get_url_by_id(photo_id)
-			self.logger.info('fsync - path: %s url: %s' % (path, cur_file.attrib['url']))
-
+			self.logger.info('fysnc - path: %s url: %s' % (path, cur_file.attrib['url']))
 		self._save_fs()
 
 		return self.flush(path, fh)
@@ -346,7 +358,7 @@ class FFFU(Operations):
 		self.logger.debug('_full_path: %s'% partial)
 		if partial.startswith("/"):
 			partial = partial[1:]
-		path = os.path.join(self.root, partial)
+		path = os.path.join(self.rootpath, partial)
 		return path
 
 	def _get_dir(self, path):
@@ -395,13 +407,13 @@ class FFFU(Operations):
 		   appends file to dummy png
 		   saves resulting file
 		"""
-		file(fname + '.png', 'wb').write(file('fffu.png', 'rb').read() + file(fname, 'rb').read())
+		file(fname + '.png', 'wb').write(file(self.ref_file, 'rb').read() + file(fname, 'rb').read())
 
 	def _png_to_data(self, fname):
 		pass
 
 	def _get_inode(self):
-		""" temporary function to return dummy inodes to create files. seed value based on root"""
+		""" temporary function to return dummy inodes to create files. seed value based on rootpath"""
 		cur_inode = self.rootree.getroot().attrib['st_inode']
 		self.rootree.getroot().attrib['st_inode'] = str(int(cur_inode) + 1)
 		return cur_inode
@@ -454,13 +466,57 @@ class FFFU(Operations):
 
 
 if __name__ == '__main__':
-	lw = 40
-	print '*' * lw
-	print 'FFFU (FUSE Flickr Filesystem for U)'.center(lw)
-	print '*' * lw
-
 	initLogging()
-	logging.debug('started')
-	mntpoint = sys.argv[1]
-	root     = sys.argv[2]
-	FUSE(FFFU(root), mntpoint, foreground=True)
+
+	lw = 44
+	logging.info('*' * lw)
+	logging.info('*' + 'FFFU (FUSE Flickr Filesystem for User)'.center(lw-2) + '*')
+	logging.info('*' * lw)
+
+	parser = argparse.ArgumentParser()
+	parser.add_argument('-i', '--init', help='initialize FFFU', action='store_true', default=False)
+	parser.add_argument('-fr', '--flickr-restore', help='restore a filesystem from Flickr by providing the fs.xml photo_id', type=int)
+	parser.add_argument('mountpoint', help='mountpoint for FFFU')
+	parser.add_argument('cache', help='local file store point')
+	args = parser.parse_args()
+
+	# check if mountpoint is a valid directory
+	if not os.path.isdir(args.mountpoint):
+		logging.error('Invalid mountpoint (not a directory)')
+		sys.exit(-1)
+
+	# check if cache is directory
+	if not os.path.isdir(args.cache):
+		logging.error('Invalid cache (not a directory)')
+		sys.exit(-1)
+
+
+	# restore mode
+	if args.flickr_restore is not None:
+		flickr    = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
+		try:
+			ret       = flickr.photos_getInfo(photo_id=args.flickr_restore)
+		except Exception, e:
+			logging.error(traceback.format_exc())
+			sys.exit(-1)
+		photo     = ret.find('photo')
+		# sample original url format
+		# https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
+		farm_id   = photo.attrib['farm']
+		server_id = photo.attrib['server']
+		photo_id  = photo.attrib['id']
+		o_secret  = photo.attrib['originalsecret']
+		url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
+		urllib.urlretrieve(url, 'fs.xml.png')
+		with open('fs.xml.png', 'rb') as src, open(args.cache + os.sep +  'fs.xml', 'wb') as dest:
+			dest.write(src.read()[3975:])
+
+	# sys.exit(-1)
+	# everything went well. starting FFFU	
+	# TODO print usage data
+	logging.info('Starting FFFU')
+	try:
+		FUSE(FFFU(args.cache), args.mountpoint, foreground=True)
+	except Exception, e:
+		logging.error(traceback.format_exc())
+		sys.exit(-1)

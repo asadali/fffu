@@ -1,0 +1,6 @@
+# api_key    = 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
+# api_secret = 'xxxxxxxxxxxxxxxx'
+api_secret   = '768e8faf9d827aad'
+# api_token  = 'xxxxxxxxxxxxxxxxx-xxxxxxxxxxxxxxxx'
+api_token    = '72157652063976241-07f9b09c99760c7e'
