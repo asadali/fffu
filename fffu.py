@@ -1,6 +1,6 @@
 """
-ff4f.py
-FUSE Filesystem for Flickr
+fffu.py
+Flickr FUSE Filesystem for U
 Copyright 2015 Sayed Asad Ali <sayedasad@ucsd.edu>
 
 THIS SOFTWARE IS SUPPLIED WITHOUT WARRANTY OF ANY KIND, AND MAY BE
@@ -11,14 +11,12 @@ AND ACKNOWLEDGEMENT OF AUTHORSHIP REMAIN.
 
 import datetime
 import logging
-from StringIO import StringIO
 import os
 import sys
 import errno
 import flickrapi
 import fs
 import fs.base
-import fs.errors
 import fuse
 import stat
 import time
@@ -48,7 +46,7 @@ class FFFU(Operations):
 		self.logger  = logging.getLogger('FF4F')
 		self.logger.debug('init')
 
-		self.offline = False
+		self.online = True
 
 		api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
 		api_secret   = '768e8faf9d827aad'
@@ -110,6 +108,8 @@ class FFFU(Operations):
 
 	def access(self, path, mode):
 		self.logger.debug('access')
+		cur_file = self._get_dir(path)
+		cur_file.attrib['st_atime'] = str(int(time.time()))
 		#TODO fffu equivalent
 		# full_path = self._full_path(path)
 		# if not os.access(full_path, mode):
@@ -137,6 +137,9 @@ class FFFU(Operations):
 		if curdir is not None:
 			for child in curdir.iterchildren('*'):
 				dirs.append(child.tag)
+
+		# this is an optimization
+		dirs.sort()
 		self.logger.debug('readdir - path: %s dirs: %s' % (path, str(dirs)))
 		for r in dirs:
 			yield r
@@ -162,7 +165,7 @@ class FFFU(Operations):
 		# first-pass just remove
 		cur_file = self._get_dir(path)
 		# delete copy on flickr
-		if not self.offline:
+		if self.online:
 			self.flickr.photos_delete(photo_id=cur_file.attrib['photo_id'])
 		# delete local copy
 		os.remove(self._full_path(cur_file.attrib['st_inode'] + '.png'))
@@ -206,6 +209,7 @@ class FFFU(Operations):
 		curdir = self._get_dir(path)
 		self.logger.debug('chmod - cur: %s new: %s' % (curdir.attrib['st_mode'], mode))
 		curdir.attrib['st_mode'] = str(mode)
+		curdir.attrib['st_ctime'] = str(int(time.time()))
 
 		self._save_fs()
 
@@ -214,6 +218,8 @@ class FFFU(Operations):
 	def chown(self, path, uid, gid):
 		#TODO
 		self.logger.info('chown')
+		curdir = self._get_dir(path)
+		curdir.attrib['st_ctime'] = str(int(time.time()))
 		raise FuseOSError(errno.ENOSYS)
 
 	def utimens(self, path, times=None):
@@ -272,10 +278,12 @@ class FFFU(Operations):
 
 		full_path = self._full_path(new_node.attrib['st_inode'])
 		tmpfile = full_path + '.png'
+
+		# binary merge of two files
 		with open('fffu.png', 'rb') as src, open(tmpfile, 'wb') as dest:
 			dest.write(src.read())
 
-		if not self.offline:
+		if self.online:
 			ret = self.flickr.upload(filename=tmpfile, is_public=0)
 			new_node.attrib['photo_id'] = ret.find('photoid').text
 			new_node.attrib['url']      = self._get_url_by_id(new_node.attrib['photo_id'])
@@ -292,13 +300,18 @@ class FFFU(Operations):
 		return os.read(fh, length)
 
 	def write(self, path, buf, offset, fh):
-		self.logger.info('write - %s buf: %s' % (path, buf))
+		# self.logger.info('write - %s buf: %s' % (path, buf))
+		self.logger.info('write - %s' % (path))
 		os.lseek(fh, offset + self.png_offset, os.SEEK_SET)
+		cur_file = self._get_dir(path)
+		cur_file.attrib['st_mtime'] = str(int(time.time()))
+
 		return os.write(fh, buf)
 
 	def truncate(self, path, length, fh=None):
 		self.logger.info('truncate - path: %s length: %s' % (path, length))
 		cur_file = self._get_dir(path)
+		cur_file.attrib['st_mtime'] = str(int(time.time()))
 		full_path = self._full_path(cur_file.attrib['st_inode'] + '.png')
 		with open(full_path, 'r+') as f:
 			f.truncate(length + self.png_offset)
@@ -317,7 +330,7 @@ class FFFU(Operations):
 	def fsync(self, path, fdatasync, fh):
 		cur_file  = self._get_dir(path)
 		file_name = cur_file.attrib['st_inode'] + '.png'
-		if not self.offline:
+		if self.online:
 			photo_id  = cur_file.attrib['photo_id']
 			ret = self.flickr.replace(filename=self._full_path(file_name), photo_id = photo_id)
 			cur_file.attrib['url']   = self._get_url_by_id(photo_id)
