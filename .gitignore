@@ -1,7 +1,7 @@
 *.pyc
 *.png
 *.DS_Store
-testFS/*
+*FS/*
 test/*
 token
 misc/*

@@ -35,6 +35,8 @@ except ImportError:
 # temporary import
 import xml.etree.cElementTree as ET
 
+# global logging formatter for this module
+# not making this a part of the FFFU class deliberately
 def initLogging():
 	# logformat = '%(asctime)-12s:[%(levelname)s] %(message)s'
 	logformat = '[%(levelname)s] %(message)s'
@@ -53,41 +55,59 @@ class FFFU(Operations):
 	""" FFFU system object """
 	def __init__(self, rootpath, fs_id=None):
 		super(FFFU, self).__init__()
+
+		# get the formatted logger from initLogging()	
 		self.logger  = logging.getLogger('FFFU')
 		self.logger.debug('init')
 
+		# this is a magic number for now, represents the file length
+		self.png_offset = 3975
+
+		# flag to know which mode fffu is operating in
+		# True  : will sync with flickr after every file/metadata operation
+		# False : local changes only
 		self.online = True
 
-		self._cache   = {}
-		self.rootpath = rootpath
-
-		self.rootxml = etree.Element( 'rootpath'
-			                        , st_type  ='d'
-			                        )
-		#TODO search for fs.xml.png 
-		# https://www.flickr.com/services/api/flickr.photos.search.html
-		self.fspath     = self._full_path('fs.xml')
-		self.ref_file   = 'fffu.png'
-		self.png_offset = 3975
-		# # to download file from flickr on start
-		# if (not os.path.exists(fspath)):
-		# 	if (fs_id == None):
-		# 		self.logger.info('need rootpath file id to start')
-		# 		raise FuseOSError(errno.EIO)
-		# 	self._get_file(self._get_url_by_id(fs_id))
-		fsfile = open(self.fspath, 'r')
-		self.rootree = etree.parse(fsfile)
-		fsfile.close()
-
+		# instantiate a flickrapi instance, abort if not online
+		#TODO base this on online value
 		self.flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
 		if not self._test_echo():
 			raise RuntimeError('flickr.test.echo failed - aborting mount')
 
-		# can use this to get context
-		# fuse.fuse_get_context()
+
+		# restore mode
+		if fs_id is not None:
+			self._restore_fs_from_flickr(fs_id)
+
+		#TODO caching data locally
+		self._cache   = {}
+
+		# this will come in handy for initialising
+		self.rootpath = rootpath
+		self.fstree  = None
+
+		#TODO search for fs.xml.png 
+		# https://www.flickr.com/services/api/flickr.photos.search.html
+		self.fspath     = self._full_path('fs.xml')
+		self.ref_file   = 'fffu.png'
+
+		# if fresh start
+		# since restore has executed by now
+		# absence of file indicates fresh start
+		# 16877 is the decimal representaiton of 40755 in octal
+		if (not os.path.exists(self.fspath)):
+			# add the root node and write it to file with starting inode = 100000000
+			# self._add_node when called with st_inode will add the root node!
+			#TODO this is cryptic behaviour and needs to be refactored
+			self._add_node('root', 16877, st_type='d', st_inode='100000000')
+
+		# the fs.xml file should be in place by now
+		# perform load
+		self._load_fs_from_xml()
 
 	def destroy(self, private_data):
 		self.logger.info('FFFU terminated')
+		#TODO this should sync its data to flickr before quitting
 		return
 
 	# Filesystem methods
@@ -274,8 +294,8 @@ class FFFU(Operations):
 		cur_file = self._get_dir(path)
 		full_path = self._full_path(cur_file.attrib['st_inode'] + '.png')
 		self.logger.info('open - %s %s %d' % (path, full_path, flags))
-		# if not os.path.isfile(full_path):
-		# 	raise FuseOSError(errno.ENOENT)
+		if not os.path.isfile(full_path):
+			self._download_from_flickr(cur_file)
 		return os.open(full_path, flags)
 
 	def create(self, path, mode, fi=None):
@@ -297,7 +317,6 @@ class FFFU(Operations):
 			new_node.attrib['url']      = self._get_url_by_id(new_node.attrib['photo_id'])
 			self.logger.info('create - path %s mode %s full_path %s url %s' % (path, mode, full_path, new_node.attrib['url']))
 
-		# os.remove(tmpfile)
 		self._save_fs()
 
 		return os.open(full_path + '.png', os.O_WRONLY | os.O_CREAT, mode)
@@ -342,12 +361,9 @@ class FFFU(Operations):
 		os.fsync(fh)
 
 		cur_file  = self._get_dir(path)
-		file_name = cur_file.attrib['st_inode'] + '.png'
-		if self.online:
-			photo_id  = cur_file.attrib['photo_id']
-			ret = self.flickr.replace(filename=self._full_path(file_name), photo_id = photo_id)
-			cur_file.attrib['url']   = self._get_url_by_id(photo_id)
-			self.logger.info('fysnc - path: %s url: %s' % (path, cur_file.attrib['url']))
+
+		self._replace_on_flickr(cur_file)
+		self.logger.info('fysnc - path: %s url: %s' % (path, cur_file.attrib['url']))
 		self._save_fs()
 
 		return self.flush(path, fh)
@@ -363,9 +379,9 @@ class FFFU(Operations):
 
 	def _get_dir(self, path):
 		if path == '/':
-			return self.rootree.getroot()
+			return self.fstree.getroot()
 		else:
-			return self.rootree.find(path)
+			return self.fstree.find(path)
 
 	def _get_parent(self, path):
 		# use only if child node doesn't exist
@@ -384,6 +400,22 @@ class FFFU(Operations):
 			return True
 		return False
 
+	def _restore_fs_from_flickr(self, fs_id):
+		self.logger.info("RESTORE MODE")
+		try:
+			url       = self._get_url_by_id(fs_id)
+		except Exception, e:
+			self.logger.error(traceback.format_exc())
+			sys.exit(-1)
+		urllib.urlretrieve(url, 'fs.xml.png')
+		with open('fs.xml.png', 'rb') as src, open(args.cache + os.sep +  'fs.xml', 'wb') as dest:
+			dest.write(src.read()[self.png_offset:])	
+
+	def _load_fs_from_xml(self):
+		fsfile = open(self.fspath, 'r')
+		self.fstree = etree.parse(fsfile)
+		fsfile.close()
+
 	def _get_url_by_id(self, id):
 		ret = self.flickr.photos_getInfo(photo_id=id)
 		photo = ret.find('photo')
@@ -396,11 +428,50 @@ class FFFU(Operations):
 		url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
 		return url
 
+	def _download_from_flickr(self, cur_file):
+		try:
+			self.logger.info('on-demand from flickr - url : %s file : %s' % (cur_file.attrib['url'], cur_file.attrib['st_inode'] + '.png'))
+			urllib.urlretrieve(cur_file.attrib['url'], self._full_path(cur_file.attrib['st_inode'] + '.png'))
+		except Exception, e:
+			logging.error(traceback.format_exc())
+
+	def _replace_on_flickr(self, cur_file):
+		if self.online:
+			file_name = cur_file.attrib['st_inode'] + '.png'
+			photo_id  = cur_file.attrib['photo_id']
+			ret = self.flickr.replace(filename=self._full_path(file_name), photo_id = photo_id)
+			cur_file.attrib['url']   = self._get_url_by_id(photo_id)
 
 	def _save_fs(self):
+
+		# save the FS locally
 		fsfile = open(self.fspath, 'w')
-		self.rootree.write(fsfile)
+		self.fstree.write(fsfile)
+		# fsfile.write(etree.tostring(self.fstree, pretty_print=True))
 		fsfile.close()
+
+		# convert xml to png
+		self._data_to_png(self.fspath)
+
+		if (len(self.fstree.getroot()) == 0):
+			# store the fs on flickr for the first time
+			ret = self.flickr.upload(filename=self.fspath + '.png', is_public=0)
+			self.fstree.getroot().attrib['photo_id'] = ret.find('photoid').text
+			self.fstree.getroot().attrib['url']      = self._get_url_by_id(self.fstree.getroot().attrib['photo_id'])
+			self.logger.info('_store_fs photo_id %s url %s' % (self.fstree.getroot().attrib['photo_id'], self.fstree.getroot().attrib['url']))
+
+			# save the FS locally
+			fsfile = open(self.fspath, 'w')
+			self.fstree.write(fsfile)
+			# fsfile.write(etree.tostring(self.fstree, pretty_print=True))
+			fsfile.close()
+
+		else:
+			# replace the existing fs file on flickr
+			photo_id  = self.fstree.getroot().attrib['photo_id']
+			ret = self.flickr.replace(filename=self.fspath + '.png', photo_id = photo_id)
+			self.fstree.getroot().attrib['url']   = self._get_url_by_id(photo_id)
+			self.logger.info('_replace_fs photo_id %s url %s' % (self.fstree.getroot().attrib['photo_id'], self.fstree.getroot().attrib['url']))
 
 	def _data_to_png(self, fname):
 		"""takes fd of any file
@@ -414,13 +485,12 @@ class FFFU(Operations):
 
 	def _get_inode(self):
 		""" temporary function to return dummy inodes to create files. seed value based on rootpath"""
-		cur_inode = self.rootree.getroot().attrib['st_inode']
-		self.rootree.getroot().attrib['st_inode'] = str(int(cur_inode) + 1)
+		cur_inode = self.fstree.getroot().attrib['st_inode']
+		self.fstree.getroot().attrib['st_inode'] = str(int(cur_inode) + 1)
 		return cur_inode
 
 	def _add_node(self, path, mode, st_type=None, st_inode=None):
-		self.logger.info('_add_node path: %s mode: %s st_type: %s flickr: %s'%(path, str(mode), st_type, st_inode))
-		parentDir  = self._get_parent(path)
+		self.logger.info('_add_node path: %s mode: %s st_type: %s st_inode: %s'%(path, str(mode), st_type, st_inode))
 
 		# convert all attributes to string
 		ctx = fuse.fuse_get_context()
@@ -432,7 +502,8 @@ class FFFU(Operations):
 		st_uid   = str(ctx[0])
 		st_gid   = str(ctx[1])
 		st_dev   = str(0)
-		st_inode = self._get_inode()
+		if(st_inode is None):
+			st_inode = self._get_inode()
 		st_nlink = str(0)
 		st_time  = str(int(time.time()))
 
@@ -449,7 +520,14 @@ class FFFU(Operations):
 			                                               , st_mtime = st_time
 			                                               , st_ctime = st_time
 			                                               )
-		parentDir.append(new_node)
+		if(self.fstree):
+			self.logger.debug('_add_node adding to fs path : %s', path)
+			parentDir  = self._get_parent(path)
+			parentDir.append(new_node)
+		else:
+			self.logger.debug('_add_node creating root')
+			# this is the root tree
+			self.fstree = etree.ElementTree(new_node)
 
 		self._save_fs()
 		return new_node
@@ -463,7 +541,6 @@ class FFFU(Operations):
 
 		self._save_fs()
 		return 0
-
 
 if __name__ == '__main__':
 	initLogging()
@@ -490,33 +567,11 @@ if __name__ == '__main__':
 		logging.error('Invalid cache (not a directory)')
 		sys.exit(-1)
 
-
-	# restore mode
-	if args.flickr_restore is not None:
-		flickr    = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
-		try:
-			ret       = flickr.photos_getInfo(photo_id=args.flickr_restore)
-		except Exception, e:
-			logging.error(traceback.format_exc())
-			sys.exit(-1)
-		photo     = ret.find('photo')
-		# sample original url format
-		# https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
-		farm_id   = photo.attrib['farm']
-		server_id = photo.attrib['server']
-		photo_id  = photo.attrib['id']
-		o_secret  = photo.attrib['originalsecret']
-		url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
-		urllib.urlretrieve(url, 'fs.xml.png')
-		with open('fs.xml.png', 'rb') as src, open(args.cache + os.sep +  'fs.xml', 'wb') as dest:
-			dest.write(src.read()[3975:])
-
-	# sys.exit(-1)
 	# everything went well. starting FFFU	
 	# TODO print usage data
 	logging.info('Starting FFFU')
 	try:
-		FUSE(FFFU(args.cache), args.mountpoint, foreground=True)
+		FUSE(FFFU(args.cache, args.flickr_restore), args.mountpoint, foreground=True)
 	except Exception, e:
 		logging.error(traceback.format_exc())
 		sys.exit(-1)

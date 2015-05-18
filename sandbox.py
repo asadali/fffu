@@ -7,6 +7,9 @@ import flickrapi
 import xml.etree.cElementTree as ET
 from xml.etree.ElementTree import Element, SubElement, ElementTree
 from xml.dom import minidom
+import os
+import sys
+from glob import glob
 
 from lxml import etree
 
@@ -227,9 +230,31 @@ def dummyFS():
     for child in tree.getroot().iterchildren('*'):
         print child.tag
 
+def fsyncTW(path):
+    rootDir = path;
+    for curDir, dirs, files in os.walk(path):
+        for fileName in files:
+            relDir  = os.path.relpath(curDir, rootDir)
+            relFile = os.path.join(relDir, fileName)
+            print relFile
+            # os.fsync(os.open(relFile, os.O_RDONLY))
+
+def lxmllen():
+    new_node = etree.Element('root', st_type  = 'test')
+    new_node.append(etree.Element('test'))
+    print etree.tostring(new_node, pretty_print=True)
+    print len(new_node)
+
+
 if __name__ == '__main__':
-    replacePhoto()
-    # delPhotoByID(ids)
+    # lxmllen()
+    # fsyncTW(sys.argv[1])
+    # replacePhoto()
+    ids = [ '17624666888'
+          , '17812466085'
+          , '17809712442'
+          ]
+    delPhotoByID(ids)
     # getInfoByID(3)
     # validUpload()
     # lxmlSandbox()
