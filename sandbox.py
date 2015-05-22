@@ -10,6 +10,8 @@ from xml.dom import minidom
 import os
 import sys
 from glob import glob
+import difflib
+import urllib
 
 from lxml import etree
 
@@ -43,19 +45,54 @@ def png_to_data(imgdata):
     length, data = ''.join(map(chr, bytes[:8])), bytes[8:]
     return ''.join(map(chr, data[:struct.unpack('L', length)[0]]))
 
-def upload():
-	with open('save.p') as f:
-		data = f.read()
-		data_to_png(data).save('mug.png', 'png')
-	with open('mug.png') as f:
-		data = f.read()
-		imgData = png_to_data(data)
-		with open('ss.p', 'w') as m:
-			m.write(imgData)
+api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
+api_secret   = '768e8faf9d827aad'
+api_token    = '72157652063976241-07f9b09c99760c7e'
+flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
+
+def atomicUpDownTest(filename):
+    print '--- d2p'
+    d2p(filename)
+
+    print '--- upload'
+    ret = flickr.upload(filename=filename + '.png', is_public=0, callback=callback)
+
+    photo_id = ret.find('photoid').text
+    print '--- photoid : %s' % photo_id
+
+    photo_url = getInfoByID(photo_id)
+    print '--- url : %s' % photo_url
+
+    print '--- download'
+    urllib.urlretrieve(photo_url, filename + '.flickr.png')
+
+    print '--- delete on Flickr'
+    ret = flickr.photos_delete(photo_id=photo_id)
+    print ret.attrib
+
+    print '--- p2d'
+    p2d(filename+'.flickr.png')
+
+    print '--- diff of modified'
+    fromLines = open(filename+'.flickr.png', 'U').readlines()
+    toLines   = open(filename+'.png', 'U').readlines()
+    for line in difflib.context_diff(fromLines, toLines, fromfile=filename + '.flickr.png', tofile=filename+'.png'):
+        sys.stdout.write(line) 
+
+    print '--- starting diff of original'
+    fromLines = open(filename, 'U').readlines()
+    toLines   = open(filename+'.flickr.down', 'U').readlines()
+    for line in difflib.context_diff(fromLines, toLines, fromfile=filename, tofile=filename+'.flickr.down'):
+        sys.stdout.write(line) 
+
+    print '--- atomicUpDownTest DONE'
+
+
 
 def d2p(fname):
     """takes fd of any file and appends file to dummy png and saves resulting file"""
     file(fname + '.png', 'wb').write(file('fffu.png', 'rb').read() + '\n' + file(fname, 'rb').read())
+    print 'd2p done'
     # file('C','wb').write(file('A','rb').read()+file('B ','rb').read()) 
 
 def p2d(fname):
@@ -64,7 +101,6 @@ def p2d(fname):
     newfile = fname[:fname.rindex('.')]
     with open(fname, 'rb') as src, open(newfile + '.down', 'wb') as dest:
         contents = src.read()
-        print contents.index('usr')
         dest.write(contents[3975:])
     print 'p2d done'
 
@@ -74,18 +110,13 @@ def callback(progress, done):
     print done
     print 10*'*'
 
-api_key      = '496f02eaab89d5b4dd5651a51fcb68bd'
-api_secret   = '768e8faf9d827aad'
-api_token    = '72157652063976241-07f9b09c99760c7e'
-flickr       = flickrapi.FlickrAPI(api_key, api_secret, token=api_token)
-
 def delPhotoByID(ids):
     for id in ids:
         ret = flickr.photos_delete(photo_id=id)
         print ET.tostring(ret, encoding = 'utf8')
 
-def getInfoByID(id):
-    ret = flickr.photos_getInfo(photo_id='17105709380')
+def getInfoByID(photo_id):
+    ret = flickr.photos_getInfo(photo_id=photo_id)
     # print ET.tostring(ret, encoding = 'utf8')
     photo = ret.find('photo')
     # https://farm{farm-id}.staticflickr.com/{server-id}/{id}_{o-secret}_o.(jpg|gif|png)
@@ -94,7 +125,7 @@ def getInfoByID(id):
     photo_id  = photo.attrib['id']
     o_secret  = photo.attrib['originalsecret']
     url       = 'https://farm%s.staticflickr.com/%s/%s_%s_o.png' % (farm_id, server_id, photo_id, o_secret)
-    print url
+    return url
 
 # <rsp stat="ok">
 # <photoid>17183990388</photoid>
@@ -230,14 +261,12 @@ def dummyFS():
     for child in tree.getroot().iterchildren('*'):
         print child.tag
 
-def fsyncTW(path):
-    rootDir = path;
-    for curDir, dirs, files in os.walk(path):
-        for fileName in files:
-            relDir  = os.path.relpath(curDir, rootDir)
-            relFile = os.path.join(relDir, fileName)
-            print relFile
-            # os.fsync(os.open(relFile, os.O_RDONLY))
+def fsyncTW(rootDir):
+    for dirname, dirnames, filenames in os.walk(rootDir):
+        for filename in filenames:
+            filePath = os.path.join(dirname, filename)
+            print filePath
+            os.fsync(os.open(filePath, os.O_RDONLY))
 
 def lxmllen():
     new_node = etree.Element('root', st_type  = 'test')
@@ -248,13 +277,14 @@ def lxmllen():
 
 if __name__ == '__main__':
     # lxmllen()
-    # fsyncTW(sys.argv[1])
+    fsyncTW(sys.argv[1])
+    # atomicUpDownTest(sys.argv[1])
     # replacePhoto()
-    ids = [ '17624666888'
-          , '17812466085'
-          , '17809712442'
-          ]
-    delPhotoByID(ids)
+    # ids = [ '17624666888'
+    #       , '17812466085'
+    #       , '17809712442'
+    #       ]
+    # delPhotoByID(ids)
     # getInfoByID(3)
     # validUpload()
     # lxmlSandbox()

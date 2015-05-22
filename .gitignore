@@ -7,3 +7,4 @@ token
 misc/*
 logs/*
 .cache/*
+syncTest/*
