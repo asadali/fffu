@@ -9,3 +9,4 @@ logs/*
 .cache/*
 syncTest/*
 config.py
+results/*
